@@ -76,7 +76,7 @@
 #include "ublox_ubx_interfaces/srv/cold_start.hpp"
 #include "ublox_ubx_interfaces/srv/reset_odo.hpp"
 
-#include "rtcm_msgs/msg/message.hpp"
+#include "mavros_msgs/msg/rtcm.hpp"
 
 using namespace std::chrono_literals;
 using std::placeholders::_1;
@@ -279,7 +279,7 @@ public:
       "ubx_sec_sig", qos, pub_options);
     ubx_sec_sig_log_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXSecSigLog>(
       "ubx_sec_sig_log", qos, pub_options);
-    rtcm_pub_ = this->create_publisher<rtcm_msgs::msg::Message>(
+    rtcm_pub_ = this->create_publisher<mavros_msgs::msg::RTCM>(
       "rtcm", 10);
 
     // ros2 parameter call backs
@@ -380,7 +380,7 @@ public:
       sub_options);
 
     RCLCPP_DEBUG(get_logger(), "creating RTCM subscription ...");
-    rtcm_sub_ = this->create_subscription<rtcm_msgs::msg::Message>(
+    rtcm_sub_ = this->create_subscription<mavros_msgs::msg::RTCM>(
       "/ntrip_client/rtcm", 10,
       std::bind(&UbloxDGNSSNode::rtcm_callback, this, _1),
       sub_options);
@@ -662,10 +662,10 @@ private:
   rclcpp::Publisher<ublox_ubx_msgs::msg::UBXMonComms>::SharedPtr ubx_mon_comms_pub_;
   rclcpp::Publisher<ublox_ubx_msgs::msg::UBXSecSig>::SharedPtr ubx_sec_sig_pub_;
   rclcpp::Publisher<ublox_ubx_msgs::msg::UBXSecSigLog>::SharedPtr ubx_sec_sig_log_pub_;
-  rclcpp::Publisher<rtcm_msgs::msg::Message>::SharedPtr rtcm_pub_;
+  rclcpp::Publisher<mavros_msgs::msg::RTCM>::SharedPtr rtcm_pub_;
 
   rclcpp::Subscription<ublox_ubx_msgs::msg::UBXEsfMeas>::SharedPtr ubx_esf_meas_sub_;
-  rclcpp::Subscription<rtcm_msgs::msg::Message>::SharedPtr rtcm_sub_;
+  rclcpp::Subscription<mavros_msgs::msg::RTCM>::SharedPtr rtcm_sub_;
 
   rclcpp::Service<ublox_ubx_interfaces::srv::HotStart>::SharedPtr hot_start_service_;
   rclcpp::Service<ublox_ubx_interfaces::srv::WarmStart>::SharedPtr warm_start_service_;
@@ -1379,7 +1379,7 @@ public:
   }
 
   UBLOX_DGNSS_NODE_LOCAL
-  void rtcm_callback(const rtcm_msgs::msg::Message & msg) const
+  void rtcm_callback(const mavros_msgs::msg::RTCM & msg) const
   {
     if (usbc_ == nullptr || !usbc_->dev_valid()) {
       RCLCPP_WARN(get_logger(), "usbc_ not valid - not sending rtcm to device!");
@@ -1391,13 +1391,13 @@ public:
     }
     std::ostringstream oss;
     std::vector<u_char> data_out;
-    data_out.reserve(msg.message.size());
-    for (auto b : msg.message) {
+    data_out.reserve(msg.data.size());
+    for (auto b : msg.data) {
       oss << std::hex << std::setfill('0') << std::setw(2) << +b;
       data_out.push_back(b);
     }
 
-    RCLCPP_DEBUG(get_logger(), "rtcm_callback msg.message: 0x%s", oss.str().c_str());
+    RCLCPP_DEBUG(get_logger(), "rtcm_callback msg.data: 0x%s", oss.str().c_str());
 
     try {
       usbc_->write_buffer(data_out.data(), data_out.size());
@@ -1906,14 +1906,14 @@ private:
       oss << std::hex << std::setfill('0') << std::setw(2) << +b;
     }
     RCLCPP_DEBUG(get_logger(), "rtcm message payload - 0x%s", oss.str().c_str());
-    auto msg = std::make_unique<rtcm_msgs::msg::Message>();
+    auto msg = std::make_unique<mavros_msgs::msg::RTCM>();
 
     // Populate the header
     msg->header.frame_id = frame_id_;
     msg->header.stamp = f->ts;
 
     // Populate fields
-    msg->message = f->buf;
+    msg->data = f->buf;
 
     // Publish the message
     rtcm_pub_->publish(*msg);
