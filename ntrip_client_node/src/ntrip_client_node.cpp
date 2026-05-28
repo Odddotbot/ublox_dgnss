@@ -19,7 +19,7 @@
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
-#include "rtcm_msgs/msg/message.hpp"
+#include "mavros_msgs/msg/rtcm.hpp"
 #include "ntrip_client_node/visibility_control.h"
 
 using namespace std::chrono_literals;
@@ -90,8 +90,8 @@ public:
     std::string userpwd = username_ + ":" + password_;
     RCLCPP_DEBUG(this->get_logger(), "userpwd: '%s'", userpwd.c_str());
 
-    // Create the publisher for rtcm_msgs::msg::Message
-    rtcm_pub_ = this->create_publisher<rtcm_msgs::msg::Message>("/ntrip_client/rtcm", 10);
+    // Create the publisher for mavros_msgs::msg::RTCM
+    rtcm_pub_ = this->create_publisher<mavros_msgs::msg::RTCM>("/ntrip_client/rtcm", 10);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
@@ -154,7 +154,7 @@ private:
   std::string log_level_;
   long maxage_conn_;
 
-  rclcpp::Publisher<rtcm_msgs::msg::Message>::SharedPtr rtcm_pub_;
+  rclcpp::Publisher<mavros_msgs::msg::RTCM>::SharedPtr rtcm_pub_;
 
   std::string ConnectionUrl()
   {
@@ -261,12 +261,12 @@ private:
     // }
 
     // Create an instance of the message and populate
-    auto message = std::make_unique<rtcm_msgs::msg::Message>();
+    auto message = std::make_unique<mavros_msgs::msg::RTCM>();
     message->header.stamp = node->get_clock()->now();
     message->header.frame_id = node->mountpoint_;
 
     // Set the data from the char* ptr
-    message->message.assign(ptr, ptr + size * nmemb);
+    message->data.assign(ptr, ptr + size * nmemb);
 
     // Publish the message
     node->rtcm_pub_->publish(std::move(message));
