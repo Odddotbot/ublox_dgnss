@@ -131,6 +131,8 @@ public:
 
     callback_group_rtcm_timer_ =
       create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    callback_group_nmea_timer_ =
+      create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     callback_group_ubx_timer_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     callback_group_usb_events_timer_ = create_callback_group(
       rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -160,6 +162,7 @@ public:
     check_for_ubx_config_file_param(parameters_client);
     check_for_device_serial_param(parameters_client);
     check_for_frame_id_param(parameters_client);
+    check_for_nmea_output_rate_param(parameters_client);
 
     // Initialize ParameterManager EARLY for parameter validation
     parameter_manager_ = std::make_shared<ParameterManager>(get_logger());
@@ -364,6 +367,11 @@ public:
     rtcm_timer_ = create_wall_timer(
       10ms, std::bind(&UbloxDGNSSNode::rtcm_timer_callback, this),
       callback_group_rtcm_timer_);
+
+    RCLCPP_DEBUG(get_logger(), "creating nmea_timer_ ...");
+    nmea_timer_ = create_wall_timer(
+      nmea_output_period_, std::bind(&UbloxDGNSSNode::nmea_timer_callback, this),
+      callback_group_nmea_timer_);
 
     ubx_cfg_ = std::make_shared<ubx::cfg::UbxCfg>(usbc_);
     ubx_cfg_->cfg_val_set_cfgdata_clear();
@@ -632,6 +640,7 @@ private:
   rclcpp::CallbackGroup::SharedPtr callback_group_usb_events_timer_;
   rclcpp::CallbackGroup::SharedPtr callback_group_ubx_timer_;
   rclcpp::CallbackGroup::SharedPtr callback_group_rtcm_timer_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_nmea_timer_;
   rclcpp::CallbackGroup::SharedPtr callback_group_param_processing_timer_;
 
   std::shared_ptr<usb::Connection> usbc_;
@@ -658,6 +667,7 @@ private:
 
   rclcpp::TimerBase::SharedPtr ubx_timer_;
   rclcpp::TimerBase::SharedPtr rtcm_timer_;
+  rclcpp::TimerBase::SharedPtr nmea_timer_;
 
 // once the usb is initialised this timer is disabled
   rclcpp::TimerBase::SharedPtr usb_init_timer_;
@@ -680,6 +690,11 @@ private:
 
   std::string frame_id_;
   const std::string FRAME_ID_PARAM_NAME = "FRAME_ID";
+
+  int nmea_output_rate_;
+  std::chrono::nanoseconds nmea_output_period_;
+  std::unique_ptr<nmea_msgs::msg::Sentence> nmea_msg_;
+  const std::string NMEA_OUTPUT_RATE_PARAM_NAME = "NMEA_OUTPUT_RATE";
 
   std::string serial_str_;
   const std::string DEV_STRING_PARAM_NAME = "DEVICE_SERIAL_STRING";
@@ -821,6 +836,29 @@ private:
     RCLCPP_INFO(
       this->get_logger(), "Parameter %s found with value: %s",
       FRAME_ID_PARAM_NAME.c_str(), frame_id_.c_str());
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void check_for_nmea_output_rate_param(rclcpp::SyncParametersClient::SharedPtr param_client)
+  {
+    // default to 1
+    nmea_output_rate_ = 1;
+    // Check if the parameter exists
+    if (!param_client->has_parameter(NMEA_OUTPUT_RATE_PARAM_NAME)) {
+      RCLCPP_INFO(
+        this->get_logger(), "Parameter %s not found, defaulting to '1' output rate",
+        NMEA_OUTPUT_RATE_PARAM_NAME.c_str());
+      return;
+    }
+
+    // Get the parameter value
+    nmea_output_rate_ = param_client->get_parameter<int>(NMEA_OUTPUT_RATE_PARAM_NAME);
+    RCLCPP_INFO(
+      this->get_logger(), "Parameter %s found with value: %d",
+      NMEA_OUTPUT_RATE_PARAM_NAME.c_str(), nmea_output_rate_);
+
+    nmea_output_period_ = std::chrono::nanoseconds(
+      static_cast<int64_t>(1e9 / nmea_output_rate_));
   }
 
   // Device family parameter validation with default F9P
@@ -1629,17 +1667,22 @@ public:
             buf[i] = 0;
           }
         }
-        auto msg = std::make_unique<nmea_msgs::msg::Sentence>();
+        const char* nmea_str = reinterpret_cast<const char*>(buf);
 
-        // Populate the header
-        msg->header.frame_id = frame_id_;
-        msg->header.stamp = ts;
+        // Only process GGA messages
+        if (len >= 6 && (std::strncmp(nmea_str, "$GPGGA", 6) == 0 || 
+                         std::strncmp(nmea_str, "$GNGGA", 6) == 0)) 
+        {
+          nmea_msg_ = std::make_unique<nmea_msgs::msg::Sentence>();
 
-        // Populate fields
-        msg->sentence = reinterpret_cast<char*>(buf);
+          // Populate the header
+          nmea_msg_->header.frame_id = frame_id_;
+          nmea_msg_->header.stamp = ts;
 
-        // Publish the message
-        nmea_pub_->publish(*msg);
+          // Populate fields
+          nmea_msg_->sentence = nmea_str;
+        }
+
       } else {
         // UBX starts with 0x65 0x62
         if (len > 2 && buf[0] == ubx::UBX_SYNC_CHAR_1 && buf[1] == ubx::UBX_SYNC_CHAR_2) {
@@ -2077,6 +2120,31 @@ private:
         rtcm_queue_.pop_front();
       }
     }
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void nmea_timer_callback()
+  {
+    if (!keep_running_) {
+      RCLCPP_WARN(get_logger(), "shutting down handling of nmea events ...");
+      nmea_timer_->cancel();
+      return;
+    }
+    RCLCPP_DEBUG_ONCE(get_logger(), "initial nmea_timer_callback ..");
+
+    // Only process NMEA messages if USB is connected
+    if (usbc_->driver_state() != usb::USBDriverState::CONNECTED) {
+      RCLCPP_DEBUG(get_logger(), "nmea_timer_callback - usb not connected!");
+      return;
+    }
+
+    if (!nmea_msg_) {
+      RCLCPP_DEBUG(get_logger(), "nmea_timer_callback - nmea_msg_ is empty, skipping.");
+      return;
+    }
+
+    // Publish and reset nmea_msg_
+    nmea_pub_->publish(std::move(nmea_msg_));
   }
 
   UBLOX_DGNSS_NODE_LOCAL
