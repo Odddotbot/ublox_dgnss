@@ -1667,11 +1667,11 @@ public:
             buf[i] = 0;
           }
         }
-        const char* nmea_str = reinterpret_cast<const char*>(buf);
+        const char * nmea_str = reinterpret_cast<const char *>(buf);
 
         // Only process GGA messages
-        if (len >= 6 && (std::strncmp(nmea_str, "$GPGGA", 6) == 0 || 
-                         std::strncmp(nmea_str, "$GNGGA", 6) == 0)) 
+        if (len >= 6 && (std::strncmp(nmea_str, "$GPGGA", 6) == 0 ||
+          std::strncmp(nmea_str, "$GNGGA", 6) == 0))
         {
           nmea_msg_ = std::make_unique<nmea_msgs::msg::Sentence>();
 
