@@ -295,6 +295,8 @@ public:
       "rtcm", 10);
     nmea_pub_ = this->create_publisher<nmea_msgs::msg::Sentence>(
       "nmea", 10);
+    nmea_gsv_pub_ = this->create_publisher<nmea_msgs::msg::Sentence>(
+      "nmea_gsv", 10);
 
     // ros2 parameter call backs
     parameters_callback_handle_ =
@@ -694,7 +696,10 @@ private:
   int nmea_output_rate_;
   std::chrono::nanoseconds nmea_output_period_;
   std::unique_ptr<nmea_msgs::msg::Sentence> nmea_msg_;
+  std::unique_ptr<nmea_msgs::msg::Sentence> nmea_gsv_msg_;
   const std::string NMEA_OUTPUT_RATE_PARAM_NAME = "NMEA_OUTPUT_RATE";
+
+  std::string nmea_gsv_str_ = "";
 
   std::string serial_str_;
   const std::string DEV_STRING_PARAM_NAME = "DEVICE_SERIAL_STRING";
@@ -743,6 +748,7 @@ private:
   rclcpp::Publisher<ublox_ubx_msgs::msg::UBXSecSigLog>::SharedPtr ubx_sec_sig_log_pub_;
   rclcpp::Publisher<mavros_msgs::msg::RTCM>::SharedPtr rtcm_pub_;
   rclcpp::Publisher<nmea_msgs::msg::Sentence>::SharedPtr nmea_pub_;
+  rclcpp::Publisher<nmea_msgs::msg::Sentence>::SharedPtr nmea_gsv_pub_;
 
   rclcpp::Subscription<ublox_ubx_msgs::msg::UBXEsfMeas>::SharedPtr ubx_esf_meas_sub_;
   rclcpp::Subscription<mavros_msgs::msg::RTCM>::SharedPtr rtcm_sub_;
@@ -1669,6 +1675,13 @@ public:
         }
         const char * nmea_str = reinterpret_cast<const char *>(buf);
 
+        if (len >= 6 && (std::strncmp(nmea_str, "$GPGSV", 6) == 0 ||
+          std::strncmp(nmea_str, "$GAGSV", 6) == 0))
+        {
+          nmea_gsv_str_ += nmea_str;
+          nmea_gsv_str_ += "\n";
+        }
+
         // Only process GGA messages
         if (len >= 6 && (std::strncmp(nmea_str, "$GPGGA", 6) == 0 ||
           std::strncmp(nmea_str, "$GNGGA", 6) == 0))
@@ -2142,9 +2155,20 @@ private:
       RCLCPP_DEBUG(get_logger(), "nmea_timer_callback - nmea_msg_ is empty, skipping.");
       return;
     }
+    
+    nmea_gsv_msg_ = std::make_unique<nmea_msgs::msg::Sentence>();
+    
+    // Copy the header (not the cleanest thing to do but ok)
+    nmea_gsv_msg_->header.frame_id = nmea_msg_->header.frame_id;
+    nmea_gsv_msg_->header.stamp = nmea_msg_->header.stamp;
 
-    // Publish and reset nmea_msg_
+    // Populate fields
+    nmea_gsv_msg_->sentence = nmea_gsv_str_;
+
+    // Publish and reset nmea_msg_ and nmea_gsv_msg_
     nmea_pub_->publish(std::move(nmea_msg_));
+    nmea_gsv_pub_->publish(std::move(nmea_gsv_msg_));
+    nmea_gsv_str_ = "";
   }
 
   UBLOX_DGNSS_NODE_LOCAL
